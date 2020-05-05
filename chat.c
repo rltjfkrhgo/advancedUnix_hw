@@ -12,6 +12,7 @@
 #include <ncurses.h>
 #include <semaphore.h>
 #include <fcntl.h>
+#include <signal.h>
 
 #define ID_SIZE 16      // the max length of user ID
 #define BUFF_SIZE 1024  // the max length a single message
@@ -66,6 +67,8 @@ void* fetchMessageFromShmThread();
 void* writeMessageToShmThread();
 void* displayMessageThread();
 void* getInputMessageThread();
+
+void sigintHandler(int signo);
 
 int main(int argc, char* argv[])
 {
@@ -141,6 +144,7 @@ void chatInit()
     sem_wait(sem);
     // and ENTER!
     shmPtr->numOfUser++;
+    buffRecv.id = shmPtr->message.id;
     // UNLOCK!!
     sem_post(sem);
 
@@ -173,13 +177,16 @@ void chatInit()
     wrefresh(inputScr);
     wrefresh(loginScr);
     wrefresh(timeScr);
+
+    // register handler
+    signal(SIGINT, sigintHandler);
 }
 
 // chatting is actually processed in this part
 void chat()
 {
     buffSend.id = 0;
-    buffRecv.id = 0;
+    //buffRecv.id = 0;
     isRunning = 1;
 
 
@@ -203,7 +210,10 @@ void* fetchMessageFromShmThread()
 
     while(isRunning)
     {
+        //pthread_mutex_lock(&mutexRecv);
+
         sem_wait(sem);
+
         if(lastFetchID != shmPtr->message.id)
         {
             memcpy(&buffRecv, &(shmPtr->message), sizeof(Message));
@@ -218,8 +228,12 @@ void* fetchMessageFromShmThread()
             }
 
             lastFetchID = buffRecv.id;
+            pthread_cond_signal(&notEmptyRecv);
         }
+
         sem_post(sem);
+
+        //pthread_mutex_unlock(&mutexRecv);
     }
 
     return NULL;
@@ -231,14 +245,19 @@ void* writeMessageToShmThread()
 
     while(isRunning)
     {
+        pthread_mutex_lock(&mutexSend);
+        pthread_cond_wait(&notEmptySend, &mutexSend);
         sem_wait(sem);
+
         if(lastWriteID != buffSend.id && shmPtr->readCount == 0)
         {
             memcpy(&(shmPtr->message), &buffSend, sizeof(Message));
             shmPtr->message.id = shmPtr->nextMsgID++;
             lastWriteID = buffSend.id;
         }
+
         sem_post(sem);
+        pthread_mutex_unlock(&mutexSend);
     }
 
     return NULL;
@@ -256,13 +275,22 @@ void* displayMessageThread()
 
     while(isRunning)
     {
+        pthread_mutex_lock(&mutexRecv);
+        pthread_cond_wait(&notEmptyRecv, &mutexRecv);
 
-        if(lastDisplayID != buffRecv.id)
+        if(strcmp(buffRecv.msg, "/bye\n") != 0)
         {
             wprintw(subOutputScr, "[%s] %d : %s", buffRecv.sender, buffRecv.id, buffRecv.msg);
             lastDisplayID = buffRecv.id;
             wrefresh(subOutputScr);
         }
+        else
+        {
+            wprintw(subOutputScr, "[%s] is exit!!\n", buffRecv.sender);
+            wrefresh(subOutputScr);
+        }
+
+        pthread_mutex_unlock(&mutexRecv);
     }
 
     delwin(subOutputScr);
@@ -282,6 +310,7 @@ void* getInputMessageThread()
         // update buffSend
         sprintf(buffSend.msg, "%s\n", temp);
         buffSend.id++;
+        pthread_cond_signal(&notEmptySend);
 
         // when type "/bye", chatting is end
         if(strcmp(buffSend.msg, "/bye\n") == 0)
@@ -295,6 +324,9 @@ void* getInputMessageThread()
         usleep(100);
     }
 
+    // maybe waiting thread
+    pthread_cond_signal(&notEmptySend);
+    pthread_cond_signal(&notEmptyRecv);
     return NULL;
 }
 
@@ -340,4 +372,10 @@ void cleanup()
         sem_post(sem);
     }
     
+}
+
+void sigintHandler(int signo)
+{
+    cleanup();
+    exit(0);
 }
