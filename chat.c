@@ -16,7 +16,6 @@
 
 #define ID_SIZE 16      // the max length of user ID
 #define BUFF_SIZE 1024  // the max length a single message
-#define QUEUE_SIZE 10   // the size of message queue in shared memory
 #define MAX_USER 18     // the number of users can join chatting room
 
 // struct of a single message
@@ -25,16 +24,25 @@ typedef struct
     int  id;
     char sender[ID_SIZE];
     char msg[BUFF_SIZE];
+    bool isValid;
 } Message;
+
+// logging in users
+typedef struct
+{
+    char user[MAX_USER][ID_SIZE];
+    int  numOfUser;
+} LoginUser;
+
 
 // struct for shared memory
 typedef struct
 {
-    Message message;
-    int     readCount;
-    int     nextMsgID;
-    int     numOfUser;
-    sem_t*  sem;
+    Message   message;
+    int       readCount;
+    int       nextMsgID;
+    LoginUser loginUser;
+    sem_t*    sem;
 } ShmStruct;
 
 int        shmid;
@@ -46,8 +54,14 @@ WINDOW* inputScr;
 WINDOW* loginScr;
 WINDOW* timeScr;
 
-Message buffSend;  // message to send
-Message buffRecv;  // message to receive
+// boxline window
+WINDOW* outputBox;
+WINDOW* loginBox;
+WINDOW* timeBox;
+
+Message   buffSend;   // message to send
+Message   buffRecv;   // message to receive
+LoginUser loginUser;  // local information of logging in users
 
 pthread_mutex_t mutexSend;
 pthread_cond_t notFullSend;
@@ -60,6 +74,7 @@ pthread_cond_t notEmptyRecv;
 int isRunning;
 
 void chatInit();
+void ncursesInit();
 void chat();
 void cleanup();
 
@@ -67,6 +82,7 @@ void* fetchMessageFromShmThread();
 void* writeMessageToShmThread();
 void* displayMessageThread();
 void* getInputMessageThread();
+void* displayTimeThread();
 
 void sigintHandler(int signo);
 
@@ -84,6 +100,7 @@ int main(int argc, char* argv[])
     strcpy(buffSend.sender, argv[1]);
 
     chatInit();
+    ncursesInit();
     chat();
     cleanup();
 
@@ -97,15 +114,17 @@ void chatInit()
 
     // if this process is the FIRST
     // create the shared memory and attach it,
-    // initialize common variables and create the semaphore
+    // initialize variables in shmPtr and create the semaphore
     if(shmid < 0)
     {
         shmid = shmget((key_t)201624416, sizeof(ShmStruct), 0644|IPC_CREAT|IPC_EXCL);
         shmPtr = (ShmStruct*)shmat(shmid, NULL, 0644);
 
-        shmPtr->readCount = 0;
+        shmPtr->message.id = 0;
+        shmPtr->message.isValid = false;
         shmPtr->nextMsgID = 1;
-        shmPtr->numOfUser = 0;
+        shmPtr->loginUser.numOfUser = 0;
+        shmPtr->readCount = shmPtr->loginUser.numOfUser;
 
         // create the named semaphore
         // initial value is ONE!
@@ -115,7 +134,6 @@ void chatInit()
             perror("sem_open(\"sem\", O_CREATE) : ");
             exit(-1);
         }
-
     }
 
     // already exsisted, just attach
@@ -132,24 +150,41 @@ void chatInit()
         exit(-1);
     }
 
+    // check shmPtr->message is not vaild
+    // then ENTER!
+    while(1)
+    {
+        // LOCK!!
+        sem_wait(sem);
+
+        if(shmPtr->message.isValid == false)
+            break;
+
+        // UNLOCK!!
+        sem_post(sem);
+        usleep(100);
+    }
+
+    // the semaphore is still LOCKED!!
+
     // before join chatting room
     // check that can I enter
-    if(shmPtr->numOfUser == MAX_USER)
+    if(shmPtr->loginUser.numOfUser == MAX_USER)
     {
+        // I must unlock the semaphore
+        sem_post(sem);
         fprintf(stderr, "chatting room is FULL!!\n");
         exit(-1);
     }
+    
+    // finally ENTER!
+    strcpy(shmPtr->loginUser.user[shmPtr->loginUser.numOfUser], buffSend.sender);
+    shmPtr->loginUser.numOfUser++;
 
-    // LOCK!!
-    sem_wait(sem);
-    // and ENTER!
-    shmPtr->numOfUser++;
-    buffRecv.id = shmPtr->message.id;
     // UNLOCK!!
     sem_post(sem);
 
-
-    // initialize mutex
+    // initialize mutexes and conditions
     pthread_mutex_init(&mutexSend, NULL);
     pthread_cond_init(&notFullSend, NULL);
     pthread_cond_init(&notEmptySend, NULL);
@@ -157,24 +192,35 @@ void chatInit()
     pthread_mutex_init(&mutexRecv, NULL);
     pthread_cond_init(&notFullRecv, NULL);
     pthread_cond_init(&notEmptyRecv, NULL);
+}
 
+void ncursesInit()
+{
     // start ncurses mode
     initscr();
 
     // make 4 subwindows
-    outputScr = subwin(stdscr, 20, 60,  0,  0);
+    outputBox = subwin(stdscr, 20, 60,  0,  0);
     inputScr  = subwin(stdscr,  4, 60, 20,  0);
-    loginScr  = subwin(stdscr, 20, 20,  0, 60);
-    timeScr   = subwin(stdscr,  4, 20, 20, 60);
+    loginBox  = subwin(stdscr, 20, 20,  0, 60);
+    timeBox   = subwin(stdscr,  4, 20, 20, 60);
 
     // draw boxline of each window
-    box(outputScr, ACS_VLINE, ACS_HLINE);
+    box(outputBox, ACS_VLINE, ACS_HLINE);
     box(inputScr, ACS_VLINE, ACS_HLINE);
-    box(loginScr, ACS_VLINE, ACS_HLINE);
-    box(timeScr, ACS_VLINE, ACS_HLINE);
+    box(loginBox, ACS_VLINE, ACS_HLINE);
+    box(timeBox, ACS_VLINE, ACS_HLINE);
 
-    wrefresh(outputScr);
+    outputScr = subwin(outputBox, 18, 58, 1, 1);
+    loginScr  = subwin(loginBox, 18, 18, 1, 1);
+    timeScr   = subwin(timeBox, 2, 18, 1, 1);
+    scrollok(outputScr, TRUE);
+
+    wrefresh(outputBox);
     wrefresh(inputScr);
+    wrefresh(loginBox);
+    wrefresh(timeBox);
+    wrefresh(outputScr);
     wrefresh(loginScr);
     wrefresh(timeScr);
 
@@ -182,13 +228,14 @@ void chatInit()
     signal(SIGINT, sigintHandler);
 }
 
-// chatting is actually processed in this part
+// create threads related to chatting
 void chat()
 {
-    buffSend.id = 0;
-    //buffRecv.id = 0;
     isRunning = 1;
 
+    // no message both send and receive
+    buffSend.isValid = false;
+    buffRecv.isValid = false;
 
     // create threads and wait for them
     pthread_t thread[4];
@@ -210,54 +257,39 @@ void* fetchMessageFromShmThread()
 
     while(isRunning)
     {
-        //pthread_mutex_lock(&mutexRecv);
+        pthread_mutex_lock(&mutexRecv);
+
+        // wait until buffRecv is not valid
+        while(buffRecv.isValid)
+        {
+            pthread_cond_wait(&notFullRecv, &mutexRecv);
+        }
 
         sem_wait(sem);
 
+        // should not read the message twice
         if(lastFetchID != shmPtr->message.id)
         {
             memcpy(&buffRecv, &(shmPtr->message), sizeof(Message));
             shmPtr->readCount++;
+            lastFetchID = buffRecv.id;
 
             // if all of users read the message
+            // the message is not vaild
             // reset the read count
-            if(shmPtr->readCount >= shmPtr->numOfUser)
+            if(shmPtr->readCount >= shmPtr->loginUser.numOfUser)
             {
-                //memset(&(shmPtr->message), 0, sizeof(Message));
                 shmPtr->readCount = 0;
+                shmPtr->message.isValid = false;
             }
 
-            lastFetchID = buffRecv.id;
+            // notify that buffRecv is not empty to the displayThread
             pthread_cond_signal(&notEmptyRecv);
         }
 
         sem_post(sem);
 
-        //pthread_mutex_unlock(&mutexRecv);
-    }
-
-    return NULL;
-}
-
-void* writeMessageToShmThread()
-{
-    int lastWriteID = 0;
-
-    while(isRunning)
-    {
-        pthread_mutex_lock(&mutexSend);
-        pthread_cond_wait(&notEmptySend, &mutexSend);
-        sem_wait(sem);
-
-        if(lastWriteID != buffSend.id && shmPtr->readCount == 0)
-        {
-            memcpy(&(shmPtr->message), &buffSend, sizeof(Message));
-            shmPtr->message.id = shmPtr->nextMsgID++;
-            lastWriteID = buffSend.id;
-        }
-
-        sem_post(sem);
-        pthread_mutex_unlock(&mutexSend);
+        pthread_mutex_unlock(&mutexRecv);
     }
 
     return NULL;
@@ -265,35 +297,36 @@ void* writeMessageToShmThread()
 
 void* displayMessageThread()
 {
-    WINDOW* subOutputScr = subwin(outputScr, 18, 58, 1, 1);
-    scrollok(subOutputScr, TRUE);
-
-    wprintw(subOutputScr, "\n ***** Type \"/bye\" to quit!! ***** \n\n");
-    wrefresh(subOutputScr);
-
-    int lastDisplayID = 0;
+    wprintw(outputScr, "\n ***** Type \"/bye\" to quit!! ***** \n\n");
+    wrefresh(outputScr);
 
     while(isRunning)
     {
         pthread_mutex_lock(&mutexRecv);
-        pthread_cond_wait(&notEmptyRecv, &mutexRecv);
+
+        // wait until buffRecv is not empty == buffRecv is vaild
+        while(buffRecv.isValid == false)
+        {
+            pthread_cond_wait(&notEmptyRecv, &mutexRecv);
+        }
 
         if(strcmp(buffRecv.msg, "/bye\n") != 0)
         {
-            wprintw(subOutputScr, "[%s] %d : %s", buffRecv.sender, buffRecv.id, buffRecv.msg);
-            lastDisplayID = buffRecv.id;
-            wrefresh(subOutputScr);
+            wprintw(outputScr, "[%s] %d : %s", buffRecv.sender, buffRecv.id, buffRecv.msg);
+            wrefresh(outputScr);
         }
         else
         {
-            wprintw(subOutputScr, "[%s] is exit!!\n", buffRecv.sender);
-            wrefresh(subOutputScr);
+            wprintw(outputScr, "[%s] is exit!!\n", buffRecv.sender);
+            wrefresh(outputScr);
         }
 
-        pthread_mutex_unlock(&mutexRecv);
-    }
+        // the buffRecv message is no longer vaild
+        buffRecv.isValid = false;
 
-    delwin(subOutputScr);
+        pthread_mutex_unlock(&mutexRecv);
+        pthread_cond_signal(&notFullRecv);
+    }
 
     return NULL;
 }
@@ -304,12 +337,17 @@ void* getInputMessageThread()
 
     while(isRunning)
     {
+        pthread_mutex_lock(&mutexSend);
+
         // put the input message in temp[]
         mvwgetstr(inputScr, 1, 1, temp);
 
         // update buffSend
         sprintf(buffSend.msg, "%s\n", temp);
         buffSend.id++;
+        buffSend.isValid = true;
+
+        pthread_mutex_unlock(&mutexSend);
         pthread_cond_signal(&notEmptySend);
 
         // when type "/bye", chatting is end
@@ -325,10 +363,39 @@ void* getInputMessageThread()
     }
 
     // maybe waiting thread
-    pthread_cond_signal(&notEmptySend);
-    pthread_cond_signal(&notEmptyRecv);
+    //pthread_cond_signal(&notEmptySend);
+    //pthread_cond_signal(&notEmptyRecv);
     return NULL;
 }
+
+void* writeMessageToShmThread()
+{
+    int lastWriteID = 0;
+
+    while(isRunning)
+    {
+        pthread_mutex_lock(&mutexSend);
+        // only when buffSend is full, write the message
+        pthread_cond_wait(&notEmptySend, &mutexSend);
+        sem_wait(sem);
+
+        //if(lastWriteID != buffSend.id && shmPtr->readCount == 0)
+        {
+            memcpy(&(shmPtr->message), &buffSend, sizeof(Message));
+            shmPtr->message.id = shmPtr->nextMsgID++;
+            shmPtr->message.isValid = false;
+            shmPtr->readCount = shmPtr->loginUser.numOfUser;
+            lastWriteID = buffSend.id;
+        }
+
+        sem_post(sem);
+        pthread_mutex_unlock(&mutexSend);
+        //pthread_cond_signal(&notFullSend);
+    }
+
+    return NULL;
+}
+
 
 // when exit the chatting room
 // I have to some actions
@@ -339,22 +406,25 @@ void cleanup()
     delwin(outputScr);
     delwin(loginScr);
     delwin(timeScr);
+    delwin(outputBox);
+    delwin(loginBox);
+    delwin(timeBox);
     endwin();
 
     pthread_mutex_destroy(&mutexSend);
     pthread_cond_destroy(&notFullSend);
     pthread_cond_destroy(&notEmptySend);
-
     pthread_mutex_destroy(&mutexRecv);
     pthread_cond_destroy(&notFullRecv);
     pthread_cond_destroy(&notEmptyRecv);
 
+    // LOCK!!
     sem_wait(sem);
 
-    shmPtr->numOfUser--;
+    shmPtr->loginUser.numOfUser--;
 
     // the last user to exit removes the shared memory
-    if(shmPtr->numOfUser == 0)
+    if(shmPtr->loginUser.numOfUser == 0)
     {
         sem_unlink("sem");
 
@@ -367,6 +437,7 @@ void cleanup()
         printf("Successfully delete shared memory.\n");
     }
 
+    // UNLOCK!!
     else
     {
         sem_post(sem);
