@@ -224,7 +224,7 @@ void ncursesInit()
     wrefresh(loginScr);
     wrefresh(timeScr);
 
-    // register handler
+    // register signal handler
     signal(SIGINT, sigintHandler);
 }
 
@@ -233,8 +233,9 @@ void chat()
 {
     isRunning = 1;
 
-    // no message both send and receive
-    buffSend.isValid = false;
+    // inform that I join
+    strcpy(buffSend.msg, "/hello");
+    buffSend.isValid = true;
     buffRecv.isValid = false;
 
     // create threads and wait for them
@@ -281,6 +282,13 @@ void* fetchMessageFromShmThread()
             {
                 shmPtr->readCount = 0;
                 shmPtr->message.isValid = false;
+            }
+
+            // if the number of login users is changed
+            // update the information of loginUser
+            if(loginUser.numOfUser != shmPtr->loginUser.numOfUser)
+            {
+                memcpy(&loginUser, &(shmPtr->loginUser), sizeof(LoginUser));
             }
 
             // notify that buffRecv is not empty to the displayThread
@@ -339,6 +347,11 @@ void* getInputMessageThread()
     {
         pthread_mutex_lock(&mutexSend);
 
+        while(buffSend.isValid == true)
+        {
+            pthread_cond_wait(&notFullSend, &mutexSend);
+        }
+
         // put the input message in temp[]
         mvwgetstr(inputScr, 1, 1, temp);
 
@@ -376,21 +389,29 @@ void* writeMessageToShmThread()
     {
         pthread_mutex_lock(&mutexSend);
         // only when buffSend is full, write the message
-        pthread_cond_wait(&notEmptySend, &mutexSend);
+        while(buffSend.isValid == false)
+        {
+            pthread_cond_wait(&notEmptySend, &mutexSend);
+        }
+
         sem_wait(sem);
 
         //if(lastWriteID != buffSend.id && shmPtr->readCount == 0)
         {
+            // WRITE!! to the shared memory
             memcpy(&(shmPtr->message), &buffSend, sizeof(Message));
             shmPtr->message.id = shmPtr->nextMsgID++;
-            shmPtr->message.isValid = false;
+            shmPtr->message.isValid = true;
             shmPtr->readCount = shmPtr->loginUser.numOfUser;
+
+            // 
             lastWriteID = buffSend.id;
+            buffSend.isValid = false;
         }
 
         sem_post(sem);
         pthread_mutex_unlock(&mutexSend);
-        //pthread_cond_signal(&notFullSend);
+        pthread_cond_signal(&notFullSend);
     }
 
     return NULL;
