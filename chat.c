@@ -329,12 +329,24 @@ void* displayMessageThread()
         {
             wprintw(outputScr, "[%s] exited!!\n", buffRecv.sender);
             wrefresh(outputScr);
+
+            for(int i = 0; i < MAX_USER; i++)
+            {
+                mvwprintw(loginScr, i+1, 1, "%s", loginUser.user[i]);
+            }
+            wrefresh(loginScr);
         }
         // case : "/hello"
         else if(strcmp(buffRecv.msg, "/hello") == 0)
         {
             wprintw(outputScr, "[%s] entered!!\n", buffRecv.sender);
             wrefresh(outputScr);
+
+            for(int i = 0; i < MAX_USER; i++)
+            {
+                mvwprintw(loginScr, i+1, 1, "%s", loginUser.user[i]);
+            }
+            wrefresh(loginScr);
         }
         // default, normal message
         else
@@ -468,7 +480,7 @@ void* displayTimeThread()
         elapsed = now - start;
         ts = *gmtime(&elapsed);
         strftime(elapsedTime, 10, "%H-%M-%S", &ts);
-        
+
         mvwprintw(timeScr, 1, 5, "%s", currentTime);
         mvwprintw(timeScr, 2, 5, "%s", elapsedTime);
         wrefresh(timeScr);
@@ -502,7 +514,20 @@ void cleanup()
     // LOCK!!
     sem_wait(sem);
 
+    // remove my userID on loginUser in the shared memory
+    int idx = 0;
+    while(strcmp(shmPtr->loginUser.user[idx], buffRecv.sender) != 0)
+    {
+        idx++;
+    }
+    for(; idx < shmPtr->loginUser.numOfUser; idx++)
+    {
+        strcpy(shmPtr->loginUser.user[idx], shmPtr->loginUser.user[idx+1]);
+    }
+    memset(shmPtr->loginUser.user[idx], ' ', sizeof(char)*ID_SIZE);
+
     shmPtr->loginUser.numOfUser--;
+
 
     // the last user to exit removes the shared memory
     if(shmPtr->loginUser.numOfUser == 0)
