@@ -473,6 +473,9 @@ void* displayTimeThread()
 
     while(isRunning)
     {
+        // 500,000us == 500ms
+        usleep(500000);
+        
         // get current time
         time(&now);
 
@@ -488,9 +491,6 @@ void* displayTimeThread()
         mvwprintw(timeScr, 1, 5, "%s", currentTime);
         mvwprintw(timeScr, 2, 5, "%s", elapsedTime);
         wrefresh(timeScr);
-        
-        // 500,000us == 500ms
-        usleep(500000);
     }
 
     return NULL;
