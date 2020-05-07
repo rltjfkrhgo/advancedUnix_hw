@@ -79,8 +79,8 @@ void* fetchMessageFromShmThread();
 void* writeMessageToShmThread();
 void* displayMessageThread();
 void* getInputMessageThread();
-void* displayLoginUserThread();
 void* displayTimeThread();
+void* getInputSpecialThread();
 
 void sigintHandler(int signo);
 
@@ -90,7 +90,7 @@ int main(int argc, char* argv[])
     // inform how to use
     if(argc != 2)
     {
-        fprintf(stderr, "[Usage] : ./chat <userID> \n");
+        fprintf(stderr, "Usage : ./chat <userID> \n");
         return -1;
     }
 
@@ -175,14 +175,13 @@ void chatJoin()
         sem_post(sem);
         usleep(100);
     }
-
     // the semaphore is still LOCKED!!
 
     // before join chatting room
     // check the number of users
     if(shmPtr->loginUser.numOfUser == MAX_USER)
     {
-        // I must unlock the semaphore
+        // I must UNLOCK the semaphore
         sem_post(sem);
         fprintf(stderr, "chatting room is FULL!!\n");
         exit(-1);
@@ -224,15 +223,14 @@ void ncursesInit()
     wrefresh(timeScr);
 
     // register signal handler
-    signal(SIGINT, sigintHandler);
+    //signal(SIGINT, sigintHandler);
 }
 
-// create threads related to chatting
 void chat()
 {
     isRunning = 1;
 
-    // inform that I joined
+    // start message to inform that I joined
     strcpy(buffSend.msg, "/hello");
     buffSend.isValid = true;
 
@@ -243,16 +241,21 @@ void chat()
     loginUser.numOfUser = 0;
 
     // create threads and wait for them
-    pthread_t thread[6];
+    pthread_t thread[5];
 
     pthread_create(&thread[0], NULL, fetchMessageFromShmThread, NULL);
     pthread_create(&thread[1], NULL, writeMessageToShmThread, NULL);
     pthread_create(&thread[2], NULL, displayMessageThread, NULL);
     pthread_create(&thread[3], NULL, getInputMessageThread, NULL);
-    pthread_create(&thread[4], NULL, displayLoginUserThread, NULL);
-    pthread_create(&thread[5], NULL, displayTimeThread, NULL);
+    pthread_create(&thread[4], NULL, displayTimeThread, NULL);
 
-    for(int i = 0; i < 6; i++)
+/*
+    if(strcmp(buffSend.sender, "Jico") == 0 || strcmp(buffSend.sender, "Izzy") == 0)
+        pthread_create(&thread[4], NULL, getInputSpecialThread, NULL);
+    else
+        */
+
+    for(int i = 0; i < 5; i++)
     {
         pthread_join(thread[i], NULL);
     }
@@ -296,6 +299,13 @@ void* fetchMessageFromShmThread()
             shmPtr->message.isValid = false;
         }
 
+        // if the number of login users is changed
+        // update the information of loginUser
+        if(loginUser.numOfUser != shmPtr->loginUser.numOfUser)
+        {
+            memcpy(&loginUser, &(shmPtr->loginUser), sizeof(LoginUser));
+        }
+
         sem_post(sem);
         /* ========== end of the shared memory section ========== */
 
@@ -325,21 +335,32 @@ void* displayMessageThread()
         // if got a NEW message!! then display the message
 
         // case : special message like "/bye" or "/hello"
-        if(strcmp(buffRecv.msg, "/bye\n") == 0 || strcmp(buffRecv.msg, "/hello") == 0)
+        if(strcmp(buffRecv.msg, "/bye\n") == 0) {}
+        if(strcmp(buffRecv.msg, "/hello") == 0|| strcmp(buffRecv.msg, "/bye") == 0)
         {
-            if(strcmp(buffRecv.msg, "/bye\n") == 0)
-                wprintw(outputScr, "[%s] exited!!\n", buffRecv.sender);
+            if(strcmp(buffRecv.msg, "/bye") == 0)
+                wprintw(outputScr, "CHAT : \"%s\" exited!!\n", buffRecv.sender);
 
             else
-                wprintw(outputScr, "[%s] entered!!\n", buffRecv.sender);
+                wprintw(outputScr, "CHAT : \"%s\" entered!!\n", buffRecv.sender);
             
             wrefresh(outputScr);
+
+            // display the information updated
+            werase(loginScr);
+            mvwprintw(loginScr, 1, 1, "# of users : %d", loginUser.numOfUser);
+            for(int i = 0; i < loginUser.numOfUser; i++)
+            {
+                mvwprintw(loginScr, i+2, 1, "%s", loginUser.user[i]);
+            }
+            box(loginScr, ACS_VLINE, ACS_HLINE);
+            wrefresh(loginScr);
         }
 
         // default, normal message
         else
         {
-            wprintw(outputScr, "[%s] %d : %s", buffRecv.sender, buffRecv.id, buffRecv.msg);
+            wprintw(outputScr, "%s : %s", buffRecv.sender, buffRecv.id, buffRecv.msg);
             wrefresh(outputScr);
         }
 
@@ -439,35 +460,6 @@ void* writeMessageToShmThread()
     return NULL;
 }
 
-void* displayLoginUserThread()
-{
-    while(isRunning)
-    {
-        sem_wait(sem);
-
-        // if the number of login users is changed
-        // update the information of loginUser
-        if(loginUser.numOfUser != shmPtr->loginUser.numOfUser)
-        {
-            memcpy(&loginUser, &(shmPtr->loginUser), sizeof(LoginUser));
-        }
-
-        sem_post(sem);
-
-        // display the information updated
-        werase(loginScr);
-        mvwprintw(loginScr, 1, 1, "# of users : %d", loginUser.numOfUser);
-        for(int i = 0; i < loginUser.numOfUser; i++)
-        {
-            mvwprintw(loginScr, i+2, 1, "%s", loginUser.user[i]);
-        }
-        box(loginScr, ACS_VLINE, ACS_HLINE);
-        wrefresh(loginScr);
-    }
-
-    return NULL;
-}
-
 void* displayTimeThread()
 {
     time_t     start;
@@ -506,9 +498,55 @@ void* displayTimeThread()
     return NULL;
 }
 
+// this is for Jico and Izzy
+// send a message automatically and randomly between 1 sec and 2secs
+// the code is almost the same as the original getInputMessageThread()
+void* getInputSpecialThread()
+{
+    int count = 0;
+    int interval = 0;
+    char temp[BUFF_SIZE];
+
+    while(isRunning)
+    {
+        pthread_mutex_lock(&mutexSend);
+
+        while(buffSend.isValid == true)
+        {
+            pthread_cond_wait(&notFullSend, &mutexSend);
+        }
+
+        // auto message
+        count++;
+        if(strcmp(buffSend.sender, "Jico") == 0)
+            sprintf(temp, "Hello!! My name is Jico I love to sing any song-%d\n", count);
+        else
+            sprintf(temp, "Hi!! I am Issy I like to play on the stage. Ho-%d\n", count);
+
+        // set the interval
+        // 0.0 <= drand48() < 1.0
+        // 1.0 <= drand48()+1 < 2.0
+        // 1000000 <= 1000000*(drand48()+1) < 2000000
+        // 1sec = 1000000 micro seconds
+        interval = 1000000 * (drand48() + 1);
+
+        // write to buffSend
+        sprintf(buffSend.msg, "%s\n", temp);
+        buffSend.isValid = true;
+
+        pthread_mutex_unlock(&mutexSend);
+        pthread_cond_signal(&notEmptySend);
+
+        usleep(interval);
+    }
+
+    pthread_cond_signal(&notEmptySend);
+
+    return NULL;
+}
+
 // when exit the chatting room
-// I have to some actions
-// delete windows etc...
+// I have to some works
 void chatExit()
 {
     delwin(inputScr);
@@ -525,6 +563,7 @@ void chatExit()
     pthread_cond_destroy(&notFullRecv);
     pthread_cond_destroy(&notEmptyRecv);
 
+    /* ========== start of the shared memory section ========== */
     // LOCK!!
     while(1)
     {
@@ -552,6 +591,13 @@ void chatExit()
 
     shmPtr->loginUser.numOfUser -= 1;
 
+    // the last farewell
+    strcpy(shmPtr->message.msg, "/bye");
+    strcpy(shmPtr->message.sender, buffSend.sender);
+    shmPtr->message.id = shmPtr->nextMsgID++;
+    shmPtr->message.isValid = true;
+    shmPtr->readCount = 0;
+
     // the last user to exit removes the named semaphore and the shared memory
     if(shmPtr->loginUser.numOfUser == 0)
     {
@@ -571,12 +617,19 @@ void chatExit()
     {
         sem_post(sem);
     }
-    
+    /* ========== end of the shared memory section ========== */
 }
 
 void sigintHandler(int signo)
 {
     isRunning = 0;
+
+    strcpy(buffSend.msg, "/bye\n");
+    buffSend.isValid = true;
+
+    pthread_mutex_unlock(&mutexSend);    
+    pthread_cond_signal(&notEmptySend);
+
     chatExit();
     exit(0);
 }
