@@ -31,8 +31,8 @@ typedef struct
 // logging in users
 typedef struct
 {
-    char user[MAX_USER][ID_SIZE];
     int  numOfUser;
+    char user[MAX_USER][ID_SIZE];
 } LoginUser;
 
 // struct for shared memory
@@ -70,14 +70,16 @@ pthread_cond_t notEmptyRecv;
 int isRunning;
 
 void chatInit();
+void chatJoin();
 void ncursesInit();
 void chat();
-void cleanup();
+void chatExit();
 
 void* fetchMessageFromShmThread();
 void* writeMessageToShmThread();
 void* displayMessageThread();
 void* getInputMessageThread();
+void* displayLoginUserThread();
 void* displayTimeThread();
 
 void sigintHandler(int signo);
@@ -96,9 +98,10 @@ int main(int argc, char* argv[])
     strcpy(buffSend.sender, argv[1]);
 
     chatInit();
+    chatJoin();
     ncursesInit();
     chat();
-    cleanup();
+    chatExit();
 
     return 0;
 }
@@ -146,6 +149,18 @@ void chatInit()
         exit(-1);
     }
 
+    // initialize mutexes and conditions
+    pthread_mutex_init(&mutexSend, NULL);
+    pthread_cond_init(&notFullSend, NULL);
+    pthread_cond_init(&notEmptySend, NULL);
+
+    pthread_mutex_init(&mutexRecv, NULL);
+    pthread_cond_init(&notFullRecv, NULL);
+    pthread_cond_init(&notEmptyRecv, NULL);
+}
+
+void chatJoin()
+{
     /* ========== start of the shared memory section ========== */
     // check shmPtr->message is not vaild
     while(1)
@@ -180,15 +195,6 @@ void chatInit()
     // UNLOCK!!
     sem_post(sem);
     /* ========== end of the shared memory section ========== */
-
-    // initialize mutexes and conditions
-    pthread_mutex_init(&mutexSend, NULL);
-    pthread_cond_init(&notFullSend, NULL);
-    pthread_cond_init(&notEmptySend, NULL);
-
-    pthread_mutex_init(&mutexRecv, NULL);
-    pthread_cond_init(&notFullRecv, NULL);
-    pthread_cond_init(&notEmptyRecv, NULL);
 }
 
 void ncursesInit()
@@ -237,15 +243,16 @@ void chat()
     loginUser.numOfUser = 0;
 
     // create threads and wait for them
-    pthread_t thread[5];
+    pthread_t thread[6];
 
     pthread_create(&thread[0], NULL, fetchMessageFromShmThread, NULL);
     pthread_create(&thread[1], NULL, writeMessageToShmThread, NULL);
     pthread_create(&thread[2], NULL, displayMessageThread, NULL);
     pthread_create(&thread[3], NULL, getInputMessageThread, NULL);
-    pthread_create(&thread[4], NULL, displayTimeThread, NULL);
+    pthread_create(&thread[4], NULL, displayLoginUserThread, NULL);
+    pthread_create(&thread[5], NULL, displayTimeThread, NULL);
 
-    for(int i = 0; i < 5; i++)
+    for(int i = 0; i < 6; i++)
     {
         pthread_join(thread[i], NULL);
     }
@@ -289,18 +296,11 @@ void* fetchMessageFromShmThread()
             shmPtr->message.isValid = false;
         }
 
-        // if the number of login users is changed
-        // update the information of loginUser
-        if(loginUser.numOfUser != shmPtr->loginUser.numOfUser)
-        {
-            memcpy(&loginUser, &(shmPtr->loginUser), sizeof(LoginUser));
-        }
-
         sem_post(sem);
         /* ========== end of the shared memory section ========== */
 
-        pthread_mutex_unlock(&mutexRecv);
         // notify that buffRecv is not empty to the displayThread
+        pthread_mutex_unlock(&mutexRecv);
         pthread_cond_signal(&notEmptyRecv);
     }
 
@@ -322,32 +322,20 @@ void* displayMessageThread()
             pthread_cond_wait(&notEmptyRecv, &mutexRecv);
         }
 
-        // if got a NEW message!! then display
+        // if got a NEW message!! then display the message
 
-        // case : "/bye"
-        if(strcmp(buffRecv.msg, "/bye\n") == 0)
+        // case : special message like "/bye" or "/hello"
+        if(strcmp(buffRecv.msg, "/bye\n") == 0 || strcmp(buffRecv.msg, "/hello") == 0)
         {
-            wprintw(outputScr, "[%s] exited!!\n", buffRecv.sender);
-            wrefresh(outputScr);
+            if(strcmp(buffRecv.msg, "/bye\n") == 0)
+                wprintw(outputScr, "[%s] exited!!\n", buffRecv.sender);
 
-            for(int i = 0; i < MAX_USER; i++)
-            {
-                mvwprintw(loginScr, i+1, 1, "%s", loginUser.user[i]);
-            }
-            wrefresh(loginScr);
-        }
-        // case : "/hello"
-        else if(strcmp(buffRecv.msg, "/hello") == 0)
-        {
-            wprintw(outputScr, "[%s] entered!!\n", buffRecv.sender);
+            else
+                wprintw(outputScr, "[%s] entered!!\n", buffRecv.sender);
+            
             wrefresh(outputScr);
-
-            for(int i = 0; i < MAX_USER; i++)
-            {
-                mvwprintw(loginScr, i+1, 1, "%s", loginUser.user[i]);
-            }
-            wrefresh(loginScr);
         }
+
         // default, normal message
         else
         {
@@ -358,6 +346,7 @@ void* displayMessageThread()
         // the buffRecv message is no longer vaild
         buffRecv.isValid = false;
 
+        // UNLOCK!! the mutex and notify the message is not vaild
         pthread_mutex_unlock(&mutexRecv);
         pthread_cond_signal(&notFullRecv);
     }
@@ -384,7 +373,6 @@ void* getInputMessageThread()
 
         // write to buffSend
         sprintf(buffSend.msg, "%s\n", temp);
-        buffSend.id++;
         buffSend.isValid = true;
 
         pthread_mutex_unlock(&mutexSend);
@@ -432,23 +420,49 @@ void* writeMessageToShmThread()
             usleep(100);
         }
 
-        //if(lastWriteID != buffSend.id && shmPtr->readCount == 0)
-        {
-            // WRITE!! to the shared memory
-            memcpy(&(shmPtr->message), &buffSend, sizeof(Message));
-            shmPtr->message.id = shmPtr->nextMsgID++;
-            shmPtr->message.isValid = true;
-            shmPtr->readCount = 0;
+        // WRITE!! to the shared memory
+        memcpy(&(shmPtr->message), &buffSend, sizeof(Message));
+        shmPtr->message.id = shmPtr->nextMsgID++;
+        shmPtr->message.isValid = true;
+        shmPtr->readCount = 0;
 
-            // buffSend message is no longer valid
-            buffSend.isValid = false;
-        }
+        // buffSend message is no longer valid
+        buffSend.isValid = false;
 
         sem_post(sem);
         /* ========== end of the shared memory section ========== */
 
         pthread_mutex_unlock(&mutexSend);
         pthread_cond_signal(&notFullSend);
+    }
+
+    return NULL;
+}
+
+void* displayLoginUserThread()
+{
+    while(isRunning)
+    {
+        sem_wait(sem);
+
+        // if the number of login users is changed
+        // update the information of loginUser
+        if(loginUser.numOfUser != shmPtr->loginUser.numOfUser)
+        {
+            memcpy(&loginUser, &(shmPtr->loginUser), sizeof(LoginUser));
+        }
+
+        sem_post(sem);
+
+        // display the information updated
+        werase(loginScr);
+        mvwprintw(loginScr, 1, 1, "# of users : %d", loginUser.numOfUser);
+        for(int i = 0; i < loginUser.numOfUser; i++)
+        {
+            mvwprintw(loginScr, i+2, 1, "%s", loginUser.user[i]);
+        }
+        box(loginScr, ACS_VLINE, ACS_HLINE);
+        wrefresh(loginScr);
     }
 
     return NULL;
@@ -495,7 +509,7 @@ void* displayTimeThread()
 // when exit the chatting room
 // I have to some actions
 // delete windows etc...
-void cleanup()
+void chatExit()
 {
     delwin(inputScr);
     delwin(outputScr);
@@ -512,9 +526,19 @@ void cleanup()
     pthread_cond_destroy(&notEmptyRecv);
 
     // LOCK!!
-    sem_wait(sem);
+    while(1)
+    {
+        sem_wait(sem);
 
-    // remove my userID on loginUser in the shared memory
+        if(shmPtr->message.isValid == false)
+            break;
+
+        sem_post(sem);
+        usleep(100);
+    }
+
+    // find my userID on loginUser in the shared memory
+    // and remove it
     int idx = 0;
     while(strcmp(shmPtr->loginUser.user[idx], buffRecv.sender) != 0)
     {
@@ -524,12 +548,11 @@ void cleanup()
     {
         strcpy(shmPtr->loginUser.user[idx], shmPtr->loginUser.user[idx+1]);
     }
-    memset(shmPtr->loginUser.user[idx], ' ', sizeof(char)*ID_SIZE);
+    memset(shmPtr->loginUser.user[idx], 0, sizeof(char)*ID_SIZE);
 
-    shmPtr->loginUser.numOfUser--;
+    shmPtr->loginUser.numOfUser -= 1;
 
-
-    // the last user to exit removes the shared memory
+    // the last user to exit removes the named semaphore and the shared memory
     if(shmPtr->loginUser.numOfUser == 0)
     {
         sem_unlink("sem");
@@ -554,6 +577,6 @@ void cleanup()
 void sigintHandler(int signo)
 {
     isRunning = 0;
-    cleanup();
+    chatExit();
     exit(0);
 }
