@@ -223,7 +223,7 @@ void ncursesInit()
     wrefresh(timeScr);
 
     // register signal handler
-    //signal(SIGINT, sigintHandler);
+    signal(SIGINT, sigintHandler);
 }
 
 void chat()
@@ -246,14 +246,12 @@ void chat()
     pthread_create(&thread[0], NULL, fetchMessageFromShmThread, NULL);
     pthread_create(&thread[1], NULL, writeMessageToShmThread, NULL);
     pthread_create(&thread[2], NULL, displayMessageThread, NULL);
-    pthread_create(&thread[3], NULL, getInputMessageThread, NULL);
-    pthread_create(&thread[4], NULL, displayTimeThread, NULL);
+    pthread_create(&thread[3], NULL, displayTimeThread, NULL);
 
-/*
     if(strcmp(buffSend.sender, "Jico") == 0 || strcmp(buffSend.sender, "Izzy") == 0)
         pthread_create(&thread[4], NULL, getInputSpecialThread, NULL);
     else
-        */
+        pthread_create(&thread[4], NULL, getInputMessageThread, NULL);
 
     for(int i = 0; i < 5; i++)
     {
@@ -336,9 +334,9 @@ void* displayMessageThread()
 
         // case : special message like "/bye" or "/hello"
         if(strcmp(buffRecv.msg, "/bye\n") == 0) {}
-        if(strcmp(buffRecv.msg, "/hello") == 0|| strcmp(buffRecv.msg, "/bye") == 0)
+        else if(strcmp(buffRecv.msg, "/hello") == 0|| strcmp(buffRecv.msg, "/farewell") == 0)
         {
-            if(strcmp(buffRecv.msg, "/bye") == 0)
+            if(strcmp(buffRecv.msg, "/farewell") == 0)
                 wprintw(outputScr, "CHAT : \"%s\" exited!!\n", buffRecv.sender);
 
             else
@@ -360,7 +358,7 @@ void* displayMessageThread()
         // default, normal message
         else
         {
-            wprintw(outputScr, "%s : %s", buffRecv.sender, buffRecv.id, buffRecv.msg);
+            wprintw(outputScr, "%s : %s", buffRecv.sender, buffRecv.msg);
             wrefresh(outputScr);
         }
 
@@ -519,15 +517,15 @@ void* getInputSpecialThread()
         // auto message
         count++;
         if(strcmp(buffSend.sender, "Jico") == 0)
-            sprintf(temp, "Hello!! My name is Jico I love to sing any song-%d\n", count);
+            sprintf(temp, "Hello!! My name is Jico I love to sing any song-%d", count);
         else
-            sprintf(temp, "Hi!! I am Issy I like to play on the stage. Ho-%d\n", count);
+            sprintf(temp, "Hi!! I am Issy I like to play on the stage. Ho-%d", count);
 
         // set the interval
         // 0.0 <= drand48() < 1.0
         // 1.0 <= drand48()+1 < 2.0
         // 1000000 <= 1000000*(drand48()+1) < 2000000
-        // 1sec = 1000000 micro seconds
+        // 1sec = 1,000,000 micro seconds
         interval = 1000000 * (drand48() + 1);
 
         // write to buffSend
@@ -592,7 +590,7 @@ void chatExit()
     shmPtr->loginUser.numOfUser -= 1;
 
     // the last farewell
-    strcpy(shmPtr->message.msg, "/bye");
+    strcpy(shmPtr->message.msg, "/farewell");
     strcpy(shmPtr->message.sender, buffSend.sender);
     shmPtr->message.id = shmPtr->nextMsgID++;
     shmPtr->message.isValid = true;
