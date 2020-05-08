@@ -559,16 +559,7 @@ void chatExit()
 
     /* ========== start of the shared memory section ========== */
     // LOCK!!
-    while(1)
-    {
-        sem_wait(sem);
-
-        if(shmPtr->message.isValid == false)
-            break;
-
-        sem_post(sem);
-        usleep(1000);
-    }
+    sem_wait(sem);
 
     // find my userID on loginUser in the shared memory
     // and remove it
