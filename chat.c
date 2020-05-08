@@ -620,6 +620,7 @@ void chatExit()
     printf("EXIT!!\n");
 }
 
+// this handlerSIGINT only works Jico and Izzy
 void handlerSIGINT(int signo)
 {
     isRunning = 0;
