@@ -1,4 +1,4 @@
-// 201624416-KIM-GISEO.c
+// chat.c -> 201624416-KIM-GISEO.c
 // Advanced Unix Take-Home Midterm Exam, Spring 2020.
 // KIM GISEO, ID# 201624416
 
@@ -82,7 +82,7 @@ void* getInputMessageThread();
 void* displayTimeThread();
 void* getInputSpecialThread();
 
-void sigintHandler(int signo);
+void handlerSIGINT(int signo);
 
 int main(int argc, char* argv[])
 {
@@ -173,7 +173,7 @@ void chatJoin()
 
         // UNLOCK!!
         sem_post(sem);
-        usleep(100);
+        usleep(1000);
     }
     // the semaphore is still LOCKED!!
 
@@ -221,9 +221,6 @@ void ncursesInit()
     wrefresh(outputScr);
     wrefresh(loginScr);
     wrefresh(timeScr);
-
-    // register signal handler
-    signal(SIGINT, sigintHandler);
 }
 
 void chat()
@@ -239,6 +236,9 @@ void chat()
     buffRecv.isValid = false;
 
     loginUser.numOfUser = 0;
+
+    // register signal handler
+    signal(SIGINT, handlerSIGINT);
 
     // create threads and wait for them
     pthread_t thread[5];
@@ -281,7 +281,7 @@ void* fetchMessageFromShmThread()
                 break;
 
             sem_post(sem);
-            usleep(100);
+            usleep(1000);
         }
 
         // FETCH!!
@@ -409,9 +409,6 @@ void* getInputMessageThread()
         usleep(100);
     }
 
-    // notify to the threads maybe waiting
-    pthread_cond_signal(&notEmptySend);
-
     return NULL;
 }
 
@@ -436,7 +433,7 @@ void* writeMessageToShmThread()
                 break;
 
             sem_post(sem);
-            usleep(100);
+            usleep(1000);
         }
 
         // WRITE!! to the shared memory
@@ -507,6 +504,14 @@ void* getInputSpecialThread()
 
     while(isRunning)
     {
+        // set the interval
+        // 0.0 <= drand48() < 1.0
+        // 1.0 <= drand48()+1 < 2.0
+        // 1000000 <= 1000000*(drand48()+1) < 2000000
+        // 1sec = 1,000,000 micro seconds
+        interval = 1000000 * (drand48() + 1);
+        usleep(interval);
+
         pthread_mutex_lock(&mutexSend);
 
         while(buffSend.isValid == true)
@@ -521,21 +526,12 @@ void* getInputSpecialThread()
         else
             sprintf(temp, "Hi!! I am Issy I like to play on the stage. Ho-%d", count);
 
-        // set the interval
-        // 0.0 <= drand48() < 1.0
-        // 1.0 <= drand48()+1 < 2.0
-        // 1000000 <= 1000000*(drand48()+1) < 2000000
-        // 1sec = 1,000,000 micro seconds
-        interval = 1000000 * (drand48() + 1);
-
         // write to buffSend
         sprintf(buffSend.msg, "%s\n", temp);
         buffSend.isValid = true;
 
         pthread_mutex_unlock(&mutexSend);
         pthread_cond_signal(&notEmptySend);
-
-        usleep(interval);
     }
 
     pthread_cond_signal(&notEmptySend);
@@ -571,7 +567,7 @@ void chatExit()
             break;
 
         sem_post(sem);
-        usleep(100);
+        usleep(1000);
     }
 
     // find my userID on loginUser in the shared memory
@@ -599,14 +595,18 @@ void chatExit()
     // the last user to exit removes the named semaphore and the shared memory
     if(shmPtr->loginUser.numOfUser == 0)
     {
-        sem_unlink("sem");
+        if(sem_unlink("sem") < 0)
+        {
+            fprintf(stderr, "Failed to unlink semaphore!!\n");
+            exit(-1);
+        }
+        printf("Successfully unlink semaphore.\n");
 
         if(shmctl(shmid, IPC_RMID, NULL) < 0)
         {
             fprintf(stderr, "Failed to delete shared memory!!\n");
             exit(-1);
         }
-
         printf("Successfully delete shared memory.\n");
     }
 
@@ -616,18 +616,11 @@ void chatExit()
         sem_post(sem);
     }
     /* ========== end of the shared memory section ========== */
+
+    printf("EXIT!!\n");
 }
 
-void sigintHandler(int signo)
+void handlerSIGINT(int signo)
 {
-    isRunning = 0;
-
-    strcpy(buffSend.msg, "/bye\n");
-    buffSend.isValid = true;
-
-    pthread_mutex_unlock(&mutexSend);    
-    pthread_cond_signal(&notEmptySend);
-
-    chatExit();
-    exit(0);
+    ("call \n");
 }
