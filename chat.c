@@ -561,10 +561,17 @@ void chatExit()
     // LOCK!!
     sem_wait(sem);
 
+    // the last farewell
+    strcpy(shmPtr->message.msg, "/farewell");
+    strcpy(shmPtr->message.sender, buffSend.sender);
+    shmPtr->message.id = shmPtr->nextMsgID++;
+    shmPtr->message.isValid = true;
+    shmPtr->readCount = 0;
+
     // find my userID on loginUser in the shared memory
     // and remove it
     int idx = 0;
-    while(strcmp(shmPtr->loginUser.user[idx], buffRecv.sender) != 0)
+    while(strcmp(shmPtr->loginUser.user[idx], buffSend.sender) != 0)
     {
         idx++;
     }
@@ -575,13 +582,6 @@ void chatExit()
     memset(shmPtr->loginUser.user[idx], 0, sizeof(char)*ID_SIZE);
 
     shmPtr->loginUser.numOfUser -= 1;
-
-    // the last farewell
-    strcpy(shmPtr->message.msg, "/farewell");
-    strcpy(shmPtr->message.sender, buffSend.sender);
-    shmPtr->message.id = shmPtr->nextMsgID++;
-    shmPtr->message.isValid = true;
-    shmPtr->readCount = 0;
 
     // the last user to exit removes the named semaphore and the shared memory
     if(shmPtr->loginUser.numOfUser == 0)
