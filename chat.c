@@ -622,5 +622,5 @@ void chatExit()
 
 void handlerSIGINT(int signo)
 {
-    ("call \n");
+    isRunning = 0;
 }
